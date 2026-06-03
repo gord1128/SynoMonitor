@@ -24,7 +24,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func openSettingsWindow() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 450, height: 620),
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 450),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false)
             window.center()

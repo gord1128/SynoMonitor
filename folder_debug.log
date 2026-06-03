@@ -1,0 +1,41 @@
+{
+  "data" : {
+    "total" : 4,
+    "shares" : [
+      {
+        "path" : "\/docker",
+        "additional" : {
+          "real_path" : "\/volume1\/docker"
+        },
+        "isdir" : true,
+        "name" : "docker"
+      },
+      {
+        "path" : "\/home",
+        "additional" : {
+          "real_path" : "\/volume1\/homes\/gord1128"
+        },
+        "isdir" : true,
+        "name" : "home"
+      },
+      {
+        "path" : "\/homes",
+        "additional" : {
+          "real_path" : "\/volume1\/homes"
+        },
+        "isdir" : true,
+        "name" : "homes"
+      },
+      {
+        "path" : "\/Storage",
+        "additional" : {
+          "real_path" : "\/volume1\/Storage"
+        },
+        "isdir" : true,
+        "name" : "Storage"
+      }
+    ],
+    "offset" : 0
+  },
+  "success" : true
+}

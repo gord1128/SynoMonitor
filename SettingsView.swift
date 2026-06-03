@@ -19,96 +19,131 @@ struct SettingsView: View {
     let displayOptions = ["NAS 다운로드", "NAS 업로드", "Mac 다운로드", "Mac 업로드", "컴팩트 (↓/↑)", "숨김"]
     
     var body: some View {
-        Form {
-            Section {
-                TextField("Tailscale 접속 IP (예: 100.x.x.x)", text: $nasIP)
-                TextField("로컬 망 접속 IP (예: 192.168.x.x)", text: $localNasIP)
-                TextField("접속 포트", text: $nasPort)
-                if nasPort == "5000" {
-                    Text("⚠️ HTTP 연결 중 — HTTPS(5001) 사용을 권장합니다.")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                }
-                TextField("접속 아이디", text: $username)
-                SecureField("비밀번호 (키체인 암호화)", text: $password)
-                    .onChange(of: password) {
-                        KeychainHelper.standard.saveString(password, service: "SynoMonitor", account: "NASPassword")
-                    }
-                Toggle("Mac 부팅 시 자동 실행", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) {
-                        do {
-                            if launchAtLogin {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
+        TabView {
+            Form {
+                Section {
+                    Toggle("Mac 부팅 시 자동 실행", isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) {
+                            do {
+                                if launchAtLogin {
+                                    try SMAppService.mainApp.register()
+                                } else {
+                                    try SMAppService.mainApp.unregister()
+                                }
+                            } catch {
+                                print("SMAppService err: \(error)")
                             }
-                        } catch {
-                            print("SMAppService err: \(error)")
+                        }
+                    
+                    Picker("메뉴바 표시 항목", selection: $menubarDisplay) {
+                        ForEach(displayOptions, id: \.self) { option in
+                            Text(option).tag(option)
                         }
                     }
+                } header: {
+                    Text("앱 동작")
+                }
                 
-                Picker("메뉴바 표시 항목", selection: $menubarDisplay) {
-                    ForEach(displayOptions, id: \.self) { option in
-                        Text(option).tag(option)
+                Section {
+                    HStack {
+                        Button("iCloud 설정 백업") {
+                            syncToiCloud()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        
+                        Spacer()
+                        
+                        Button("iCloud 설정 복원") {
+                            syncFromiCloud()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                } header: {
+                    Text("iCloud 동기화")
+                }
+                
+                Section {
+                    Button(role: .destructive) {
+                        resetApp()
+                    } label: {
+                        Text("초기화 및 로그아웃")
+                            .foregroundColor(.red)
                     }
                 }
             }
-            
-            Section {
-                TextField("강제 표시할 CPU 모델명", text: $customCPUName)
-            } header: {
-                Text("헤놀로지 사용자 커스텀 설정")
-            } footer: {
-                Text("비워두면 시스템 정보를 자동으로 추출합니다.")
+            .formStyle(.grouped)
+            .tabItem {
+                Label("일반", systemImage: "gearshape")
             }
             
-            Section {
-                VStack(alignment: .leading) {
-                    Text("CPU 알림 임계치: \(Int(cpuAlertThreshold * 100))%")
-                    Slider(value: $cpuAlertThreshold, in: 0.5...1.0, step: 0.05)
+            Form {
+                Section {
+                    TextField("Tailscale 접속 IP (예: 100.x.x.x)", text: $nasIP)
+                    TextField("로컬 망 접속 IP (예: 192.168.x.x)", text: $localNasIP)
+                    TextField("접속 포트", text: $nasPort)
+                    if nasPort == "5000" {
+                        Text("⚠️ HTTP 연결 중 — HTTPS(5001) 사용을 권장합니다.")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                    }
+                } header: {
+                    Text("네트워크 설정")
                 }
-                VStack(alignment: .leading) {
-                    Text("스토리지 알림 임계치: \(Int(storageAlertThreshold * 100))%")
-                    Slider(value: $storageAlertThreshold, in: 0.5...1.0, step: 0.05)
+                
+                Section {
+                    TextField("접속 아이디", text: $username)
+                    SecureField("비밀번호 (키체인 암호화)", text: $password)
+                        .onChange(of: password) {
+                            KeychainHelper.standard.saveString(password, service: "SynoMonitor", account: "NASPassword")
+                        }
+                } header: {
+                    Text("인증 정보")
+                } footer: {
+                    Text("입력하신 비밀번호는 Apple의 안전한 키체인(Keychain)에 암호화되어 보관됩니다.")
                 }
-            } header: {
-                Text("시스템 경고 알림 (알림 쿨타임 1시간)")
-            } footer: {
-                Text("NAS의 리소스 사용량이 위 수치를 초과하면 데스크톱 알림이 전송됩니다.")
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("계정", systemImage: "person.crop.circle")
             }
             
-            Text("입력하신 비밀번호는 Apple의 안전한 키체인(Keychain)에 암호화되어 보관됩니다.")
-                .font(.footnote)
-                .foregroundColor(.secondary)
-                .padding(.top, 10)
-                
-            HStack {
-                Button("iCloud 설정 백업") {
-                    syncToiCloud()
+            Form {
+                Section {
+                    VStack(alignment: .leading) {
+                        Text("CPU 알림 임계치: \(Int(cpuAlertThreshold * 100))%")
+                        Slider(value: $cpuAlertThreshold, in: 0.5...1.0, step: 0.05)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("스토리지 알림 임계치: \(Int(storageAlertThreshold * 100))%")
+                        Slider(value: $storageAlertThreshold, in: 0.5...1.0, step: 0.05)
+                    }
+                } header: {
+                    Text("시스템 경고 알림 (알림 쿨타임 1시간)")
+                } footer: {
+                    Text("NAS의 리소스 사용량이 위 수치를 초과하면 데스크톱 알림이 전송됩니다.")
                 }
-                .buttonStyle(.borderedProminent)
-                
-                Spacer()
-                
-                Button(role: .destructive) {
-                    resetApp()
-                } label: {
-                    Text("초기화 및 로그아웃")
-                        .foregroundColor(.red)
-                }
-                .buttonStyle(.bordered)
-                
-                Spacer()
-                
-                Button("iCloud 설정 복원") {
-                    syncFromiCloud()
-                }
-                .buttonStyle(.bordered)
             }
-            .padding(.top, 10)
+            .formStyle(.grouped)
+            .tabItem {
+                Label("알림", systemImage: "bell")
+            }
+            
+            Form {
+                Section {
+                    TextField("강제 표시할 CPU 모델명", text: $customCPUName)
+                } header: {
+                    Text("헤놀로지 사용자 커스텀 설정")
+                } footer: {
+                    Text("비워두면 시스템 정보를 자동으로 추출합니다.")
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem {
+                Label("고급", systemImage: "slider.horizontal.3")
+            }
         }
-        .padding(20)
-        .frame(width: 450, height: 620)
+        .frame(width: 500, height: 450)
+        .padding()
         .alert(isPresented: $showAlert) {
             Alert(title: Text("알림"), message: Text(alertMessage), dismissButton: .default(Text("확인")))
         }

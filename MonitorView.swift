@@ -134,21 +134,37 @@ struct MonitorView: View {
             // 텍스트 기반 속도 현황
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("NAS 업로드: " + String(format: "%.1f MB/s", nasManager.networkUp))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundColor(.blue)
-                    Text("Mac 업로드: " + String(format: "%.1f MB/s", nasManager.macNetworkUp))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundColor(.blue.opacity(0.6))
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .foregroundColor(.blue)
+                        Text("NAS 업로드: " + String(format: "%.1f MB/s", nasManager.networkUp))
+                            .font(.system(.footnote, design: .rounded).monospacedDigit())
+                            .foregroundColor(.blue)
+                    }
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.circle")
+                            .foregroundColor(.blue.opacity(0.6))
+                        Text("Mac 업로드: " + String(format: "%.1f MB/s", nasManager.macNetworkUp))
+                            .font(.system(.footnote, design: .rounded).monospacedDigit())
+                            .foregroundColor(.blue.opacity(0.6))
+                    }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text("NAS 다운로드: " + String(format: "%.1f MB/s", nasManager.networkDown))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundColor(.orange)
-                    Text("Mac 다운로드: " + String(format: "%.1f MB/s", nasManager.macNetworkDown))
-                        .font(.footnote.monospacedDigit())
-                        .foregroundColor(.orange.opacity(0.6))
+                    HStack(spacing: 4) {
+                        Text("NAS 다운로드: " + String(format: "%.1f MB/s", nasManager.networkDown))
+                            .font(.system(.footnote, design: .rounded).monospacedDigit())
+                            .foregroundColor(.orange)
+                        Image(systemName: "arrow.down.circle.fill")
+                            .foregroundColor(.orange)
+                    }
+                    HStack(spacing: 4) {
+                        Text("Mac 다운로드: " + String(format: "%.1f MB/s", nasManager.macNetworkDown))
+                            .font(.system(.footnote, design: .rounded).monospacedDigit())
+                            .foregroundColor(.orange.opacity(0.6))
+                        Image(systemName: "arrow.down.circle")
+                            .foregroundColor(.orange.opacity(0.6))
+                    }
                 }
             }
             
@@ -166,11 +182,18 @@ struct MonitorView: View {
                     )
                     .foregroundStyle(by: .value("Device", item.device))
                     .interpolationMethod(.catmullRom)
+                    
+                    AreaMark(
+                        x: .value("Time", item.time),
+                        y: .value("Speed", item.speed)
+                    )
+                    .foregroundStyle(by: .value("Device", item.device))
+                    .interpolationMethod(.catmullRom)
                 }
             }
             .chartForegroundStyleScale([
-                "NAS": Color.orange,
-                "Mac": Color.orange.opacity(0.5)
+                "NAS": AnyShapeStyle(LinearGradient(gradient: Gradient(colors: [Color.orange.opacity(0.5), Color.orange.opacity(0.0)]), startPoint: .top, endPoint: .bottom)),
+                "Mac": AnyShapeStyle(LinearGradient(gradient: Gradient(colors: [Color.orange.opacity(0.2), Color.orange.opacity(0.0)]), startPoint: .top, endPoint: .bottom))
             ])
             .chartYAxis {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
@@ -178,7 +201,7 @@ struct MonitorView: View {
                     AxisValueLabel {
                         if let speed = value.as(Double.self) {
                             Text(String(format: "%.1f", speed))
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 10, design: .rounded))
                         }
                     }
                 }
@@ -201,11 +224,18 @@ struct MonitorView: View {
                     )
                     .foregroundStyle(by: .value("Device", item.device))
                     .interpolationMethod(.catmullRom)
+                    
+                    AreaMark(
+                        x: .value("Time", item.time),
+                        y: .value("Speed", item.speed)
+                    )
+                    .foregroundStyle(by: .value("Device", item.device))
+                    .interpolationMethod(.catmullRom)
                 }
             }
             .chartForegroundStyleScale([
-                "NAS": Color.blue,
-                "Mac": Color.blue.opacity(0.5)
+                "NAS": AnyShapeStyle(LinearGradient(gradient: Gradient(colors: [Color.blue.opacity(0.5), Color.blue.opacity(0.0)]), startPoint: .top, endPoint: .bottom)),
+                "Mac": AnyShapeStyle(LinearGradient(gradient: Gradient(colors: [Color.blue.opacity(0.2), Color.blue.opacity(0.0)]), startPoint: .top, endPoint: .bottom))
             ])
             .chartYAxis {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
@@ -213,7 +243,7 @@ struct MonitorView: View {
                     AxisValueLabel {
                         if let speed = value.as(Double.self) {
                             Text(String(format: "%.1f", speed))
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 10, design: .rounded))
                         }
                     }
                 }
@@ -237,7 +267,7 @@ struct MonitorView: View {
                             .foregroundColor(.secondary)
                     } currentValueLabel: {
                         Text("\(Int(nasManager.cpuUsage * 100))%")
-                            .font(.caption2.monospacedDigit().bold())
+                            .font(.system(.caption2, design: .rounded).monospacedDigit().bold())
                     }
                     .gaugeStyle(.accessoryCircular)
                     .tint(nasManager.cpuUsage > 0.8 ? Color.red : Color.blue)
@@ -267,7 +297,7 @@ struct MonitorView: View {
                             .foregroundColor(.secondary)
                     } currentValueLabel: {
                         Text("\(Int(nasManager.ramUsage * 100))%")
-                            .font(.caption2.monospacedDigit().bold())
+                            .font(.system(.caption2, design: .rounded).monospacedDigit().bold())
                     }
                     .gaugeStyle(.accessoryCircular)
                     .tint(nasManager.ramUsage > 0.8 ? Color.red : Color.purple)
