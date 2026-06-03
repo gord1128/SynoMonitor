@@ -26,12 +26,18 @@ class NetworkRouter: ObservableObject {
         
         if !localIP.isEmpty {
             // Ping Local IP
-            guard let url = URL(string: "http://\(localIP):\(port)/") else { return }
+            let scheme = port == "5001" ? "https" : "http"
+            guard let url = URL(string: "\(scheme)://\(localIP):\(port)/") else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 1.0
             
-            URLSession.shared.dataTask(with: request) { _, response, error in
-                let success = error == nil && (response as? HTTPURLResponse)?.statusCode ?? 500 < 500
+            let config = URLSessionConfiguration.ephemeral
+            config.timeoutIntervalForRequest = 1.0
+            config.timeoutIntervalForResource = 1.0
+            let pingSession = URLSession(configuration: config)
+            
+            pingSession.dataTask(with: request) { _, response, error in
+                let success = error == nil && (response as? HTTPURLResponse)?.statusCode ?? 500 < 400
                 DispatchQueue.main.async {
                     if success {
                         self.activeIP = localIP
@@ -41,6 +47,7 @@ class NetworkRouter: ObservableObject {
                         self.isTailscale = true
                     }
                 }
+                pingSession.finishTasksAndInvalidate()
             }.resume()
         } else {
             DispatchQueue.main.async {

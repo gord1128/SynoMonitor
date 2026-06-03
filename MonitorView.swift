@@ -5,6 +5,7 @@ struct MonitorView: View {
     @AppStorage("customCPUName") private var customCPUName = ""
     @ObservedObject var nasManager: NASNetworkManager
     @State private var showStorage: Bool = false
+    @State private var otpCode: String = ""
     
     private var specText: String {
         var text = nasManager.nasModel
@@ -69,35 +70,66 @@ struct MonitorView: View {
                     .foregroundColor(nasManager.errorMessage != nil ? .red : (nasManager.isTailscaleConnected ? .green : .blue))
             }
             
-            if !specText.isEmpty || !nasManager.diskModels.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    if !specText.isEmpty {
-                        Text(specText)
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
+            if nasManager.requiresOTP {
+                Divider()
+                VStack(alignment: .center, spacing: 16) {
+                    Image(systemName: "lock.shield.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.orange)
+                    Text("2단계 인증 필요")
+                        .font(.headline)
+                    Text("NAS 보안 설정에 의해 OTP 코드가 필요합니다.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    
+                    TextField("6자리 코드 입력", text: $otpCode)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .frame(width: 120)
+                        .multilineTextAlignment(.center)
+                    
+                    Button("인증하기") {
+                        nasManager.submitOTP(otpCode)
                     }
-                    if !nasManager.diskModels.isEmpty {
-                        Text("Disks: \(nasManager.diskModels)")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary.opacity(0.8))
-                    }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.bottom, 4)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 20)
             } else {
-                Spacer().frame(height: 4)
-            }
-            
-            if let errorMsg = nasManager.errorMessage {
-                Text("⚠️ " + errorMsg)
-                    .font(.caption)
-                    .foregroundColor(.white)
-                    .padding(8)
+                if !specText.isEmpty || !nasManager.diskModels.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if !specText.isEmpty {
+                            Text(specText)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        if !nasManager.diskModels.isEmpty {
+                            Text("Disks: \(nasManager.diskModels)")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary.opacity(0.8))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.red.opacity(0.8).cornerRadius(8))
-            }
-            
-            Divider()
+                    .padding(.bottom, 4)
+                } else {
+                    Spacer().frame(height: 4)
+                }
+                
+                if let errorMsg = nasManager.errorMessage {
+                    Text("⚠️ " + errorMsg)
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.8).cornerRadius(8))
+                }
+                
+                Divider()
+                
+                ZStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 12) {
             
             // 텍스트 기반 속도 현황
             HStack {
@@ -210,15 +242,18 @@ struct MonitorView: View {
                     .gaugeStyle(.accessoryCircular)
                     .tint(nasManager.cpuUsage > 0.8 ? Color.red : Color.blue)
                     .animation(.easeInOut(duration: 0.5), value: nasManager.cpuUsage)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("CPU 사용량")
+                    .accessibilityValue("\(Int(nasManager.cpuUsage * 100)) 퍼센트")
                     
                     let cpuDisplay = customCPUName.isEmpty ? nasManager.cpuModel : customCPUName
                     if !cpuDisplay.isEmpty {
                         Text(cpuDisplay)
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 100)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 140)
                     } else {
                         Text(" ")
                             .font(.system(size: 9))
@@ -237,6 +272,9 @@ struct MonitorView: View {
                     .gaugeStyle(.accessoryCircular)
                     .tint(nasManager.ramUsage > 0.8 ? Color.red : Color.purple)
                     .animation(.easeInOut(duration: 0.5), value: nasManager.ramUsage)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("RAM 사용량")
+                    .accessibilityValue("\(Int(nasManager.ramUsage * 100)) 퍼센트")
                     
                     if nasManager.totalRamGB > 0 {
                         Text("\(Int(round(nasManager.totalRamGB))) GB")
@@ -250,8 +288,36 @@ struct MonitorView: View {
             }
             .padding(.vertical, 4)
             
-            Divider()
+            if !nasManager.topProcesses.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("CPU 상위 프로세스")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(.orange)
+                    ForEach(nasManager.topProcesses) { proc in
+                        HStack(spacing: 6) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 8))
+                                .foregroundColor(proc.cpu > 50 ? .red : .secondary)
+                            Text(proc.name)
+                                .font(.caption2)
+                                .foregroundColor(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Text(String(format: "CPU %.0f%%", proc.cpu))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(proc.cpu > 50 ? .red : .secondary)
+                            Text(String(format: "RAM %.0f%%", proc.ram))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .padding(8)
+                .background(Color.orange.opacity(0.08))
+                .cornerRadius(8)
+            }
             
+            Divider()
             Button(action: {
                 withAnimation(.spring()) {
                     showStorage.toggle()
@@ -269,6 +335,28 @@ struct MonitorView: View {
                 .cornerRadius(6)
             }
             .buttonStyle(.plain)
+            }
+            .blur(radius: nasManager.errorMessage != nil ? 3 : 0)
+            .grayscale(nasManager.errorMessage != nil ? 0.8 : 0)
+            .disabled(nasManager.errorMessage != nil)
+            
+            if nasManager.errorMessage != nil {
+                VStack(spacing: 8) {
+                    Image(systemName: "wifi.exclamationmark")
+                        .font(.system(size: 40))
+                        .foregroundColor(.red)
+                    Text("오프라인 상태")
+                        .font(.headline)
+                    Text("데이터 갱신 중지됨")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(20)
+                .background(Color(NSColor.windowBackgroundColor).opacity(0.85))
+                .cornerRadius(12)
+                .shadow(radius: 5)
+            }
+            } // Close ZStack
             
             Divider()
             
@@ -276,7 +364,8 @@ struct MonitorView: View {
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
-        }
+            } // Close `else` block
+        } // Close VStack
         .padding()
         .frame(width: 320, alignment: .top)
         
@@ -289,17 +378,5 @@ struct MonitorView: View {
         }
         }
         .fixedSize()
-    }
-    
-    private func formatFolderSize(_ bytes: Double) -> String {
-        if bytes >= 1_099_511_627_776.0 {
-            return String(format: "%.1f TB", bytes / 1_099_511_627_776.0)
-        } else if bytes >= 1_073_741_824.0 {
-            return String(format: "%.1f GB", bytes / 1_073_741_824.0)
-        } else if bytes >= 1_048_576.0 {
-            return String(format: "%.1f MB", bytes / 1_048_576.0)
-        } else {
-            return "\(Int(bytes)) B"
-        }
     }
 }

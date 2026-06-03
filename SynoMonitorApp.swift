@@ -24,13 +24,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     @objc func openSettingsWindow() {
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 450, height: 450),
+                contentRect: NSRect(x: 0, y: 0, width: 450, height: 620),
                 styleMask: [.titled, .closable],
                 backing: .buffered, defer: false)
             window.center()
             window.isReleasedWhenClosed = false
             window.title = "NAS 접속 설정"
-            window.contentView = NSHostingView(rootView: SettingsView())
+            window.contentView = NSHostingView(rootView: SettingsView(resetAction: {
+                self.nasManager.resetData()
+            }))
             self.settingsWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -66,7 +68,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 } else if !self.nasManager.isTailscaleConnected {
                     iconName = "network.slash"
                 }
-                self.statusBarItem.button?.image = NSImage(systemSymbolName: iconName, accessibilityDescription: "SynoMonitor")
+                let a11yDesc = iconName == "network" ? "정상 연결됨" : (iconName == "network.slash" ? "오프라인" : "연결 오류")
+                self.statusBarItem.button?.image = NSImage(systemSymbolName: iconName, accessibilityDescription: "SynoMonitor 상태: \(a11yDesc)")
                 
                 let pref = UserDefaults.standard.string(forKey: "menubarDisplay") ?? "NAS 다운로드"
                 var displayString = ""
@@ -80,6 +83,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                     if self.nasManager.macNetworkDown > 0 { displayString = String(format: " %.1f MB/s", self.nasManager.macNetworkDown) }
                 case "Mac 업로드":
                     if self.nasManager.macNetworkUp > 0 { displayString = String(format: " %.1f MB/s", self.nasManager.macNetworkUp) }
+                case "컴팩트 (↓/↑)":
+                    var parts: [String] = []
+                    if self.nasManager.networkDown > 0 { parts.append(String(format: "↓%.1f", self.nasManager.networkDown)) }
+                    if self.nasManager.networkUp > 0 { parts.append(String(format: "↑%.1f", self.nasManager.networkUp)) }
+                    if !parts.isEmpty { displayString = " " + parts.joined(separator: " ") }
                 default:
                     break
                 }
@@ -114,11 +122,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
     
     func popoverDidShow(_ notification: Notification) {
-        nasManager.changePollingInterval(3.0)
+        nasManager.changePollingInterval(1.5)
     }
     
     func popoverDidClose(_ notification: Notification) {
-        nasManager.changePollingInterval(15.0)
+        nasManager.changePollingInterval(300.0) // 5 minutes to protect NAS Hibernation
     }
     
     @objc func togglePopover(_ sender: AnyObject?) {

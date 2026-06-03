@@ -10,6 +10,7 @@ struct SpeedDataPoint: Identifiable {
 
 class LocalNetworkMonitor {
     static let shared = LocalNetworkMonitor()
+    private let lock = NSLock()
     private var lastRx: UInt64 = 0
     private var lastTx: UInt64 = 0
     private var lastTime: Date?
@@ -17,6 +18,8 @@ class LocalNetworkMonitor {
     private init() {}
     
     func getNetworkSpeedInMBps() -> (rx: Double, tx: Double) {
+        lock.lock()
+        defer { lock.unlock() }
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0 else { return (0, 0) }
         defer { freeifaddrs(ifaddr) }

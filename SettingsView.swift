@@ -10,9 +10,13 @@ struct SettingsView: View {
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("menubarDisplay") private var menubarDisplay = "NAS 다운로드"
     @AppStorage("customCPUName") private var customCPUName = ""
+    @AppStorage("cpuAlertThreshold") private var cpuAlertThreshold: Double = 0.90
+    @AppStorage("storageAlertThreshold") private var storageAlertThreshold: Double = 0.90
     @State private var password = ""
     
-    let displayOptions = ["NAS 다운로드", "NAS 업로드", "Mac 다운로드", "Mac 업로드", "숨김"]
+    var resetAction: (() -> Void)? = nil
+    
+    let displayOptions = ["NAS 다운로드", "NAS 업로드", "Mac 다운로드", "Mac 업로드", "컴팩트 (↓/↑)", "숨김"]
     
     var body: some View {
         Form {
@@ -20,8 +24,16 @@ struct SettingsView: View {
                 TextField("Tailscale 접속 IP (예: 100.x.x.x)", text: $nasIP)
                 TextField("로컬 망 접속 IP (예: 192.168.x.x)", text: $localNasIP)
                 TextField("접속 포트", text: $nasPort)
+                if nasPort == "5000" {
+                    Text("⚠️ HTTP 연결 중 — HTTPS(5001) 사용을 권장합니다.")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
                 TextField("접속 아이디", text: $username)
                 SecureField("비밀번호 (키체인 암호화)", text: $password)
+                    .onChange(of: password) {
+                        KeychainHelper.standard.saveString(password, service: "SynoMonitor", account: "NASPassword")
+                    }
                 Toggle("Mac 부팅 시 자동 실행", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) {
                         do {
@@ -50,6 +62,21 @@ struct SettingsView: View {
                 Text("비워두면 시스템 정보를 자동으로 추출합니다.")
             }
             
+            Section {
+                VStack(alignment: .leading) {
+                    Text("CPU 알림 임계치: \(Int(cpuAlertThreshold * 100))%")
+                    Slider(value: $cpuAlertThreshold, in: 0.5...1.0, step: 0.05)
+                }
+                VStack(alignment: .leading) {
+                    Text("스토리지 알림 임계치: \(Int(storageAlertThreshold * 100))%")
+                    Slider(value: $storageAlertThreshold, in: 0.5...1.0, step: 0.05)
+                }
+            } header: {
+                Text("시스템 경고 알림 (알림 쿨타임 1시간)")
+            } footer: {
+                Text("NAS의 리소스 사용량이 위 수치를 초과하면 데스크톱 알림이 전송됩니다.")
+            }
+            
             Text("입력하신 비밀번호는 Apple의 안전한 키체인(Keychain)에 암호화되어 보관됩니다.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
@@ -63,6 +90,16 @@ struct SettingsView: View {
                 
                 Spacer()
                 
+                Button(role: .destructive) {
+                    resetApp()
+                } label: {
+                    Text("초기화 및 로그아웃")
+                        .foregroundColor(.red)
+                }
+                .buttonStyle(.bordered)
+                
+                Spacer()
+                
                 Button("iCloud 설정 복원") {
                     syncFromiCloud()
                 }
@@ -71,16 +108,13 @@ struct SettingsView: View {
             .padding(.top, 10)
         }
         .padding(20)
-        .frame(width: 450, height: 500)
+        .frame(width: 450, height: 620)
         .alert(isPresented: $showAlert) {
             Alert(title: Text("알림"), message: Text(alertMessage), dismissButton: .default(Text("확인")))
         }
         .onAppear {
             self.password = KeychainHelper.standard.readString(service: "SynoMonitor", account: "NASPassword") ?? ""
             self.launchAtLogin = SMAppService.mainApp.status == .enabled
-        }
-        .onDisappear {
-            KeychainHelper.standard.saveString(password, service: "SynoMonitor", account: "NASPassword")
         }
     }
     
@@ -103,7 +137,6 @@ struct SettingsView: View {
             "localNasIP": localNasIP,
             "nasPort": nasPort,
             "username": username,
-            "password": password,
             "menubarDisplay": menubarDisplay,
             "customCPUName": customCPUName
         ]
@@ -134,10 +167,6 @@ struct SettingsView: View {
             if let v = settings["localNasIP"] { localNasIP = v }
             if let v = settings["nasPort"] { nasPort = v }
             if let v = settings["username"] { username = v }
-            if let v = settings["password"] { 
-                password = v 
-                KeychainHelper.standard.saveString(v, service: "SynoMonitor", account: "NASPassword")
-            }
             if let v = settings["menubarDisplay"] { menubarDisplay = v }
             if let v = settings["customCPUName"] { customCPUName = v }
             
@@ -147,5 +176,29 @@ struct SettingsView: View {
             alertMessage = "복원 실패: 백업 파일이 없거나 읽을 수 없습니다."
             showAlert = true
         }
+    }
+    
+    private func resetApp() {
+        KeychainHelper.standard.delete(service: "SynoMonitor", account: "NASPassword")
+        if let domain = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: domain)
+            UserDefaults.standard.synchronize()
+        }
+        
+        nasIP = ""
+        localNasIP = ""
+        nasPort = "5000"
+        username = ""
+        password = ""
+        launchAtLogin = false
+        menubarDisplay = "NAS 다운로드"
+        customCPUName = ""
+        cpuAlertThreshold = 0.90
+        storageAlertThreshold = 0.90
+        
+        resetAction?()
+        
+        alertMessage = "앱이 완전히 초기화되었습니다.\n새로운 계정 정보를 입력해주세요."
+        showAlert = true
     }
 }

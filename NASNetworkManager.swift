@@ -2,6 +2,21 @@ import Foundation
 import Combine
 import OSLog
 
+struct VolumeInfo: Identifiable {
+    let id = UUID()
+    let name: String
+    let totalBytes: Double
+    let usedBytes: Double
+    var percentage: Double { totalBytes > 0 ? usedBytes / totalBytes : 0 }
+}
+
+struct ProcessInfo: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let cpu: Double
+    let ram: Double
+}
+
 @MainActor
 class NASNetworkManager: ObservableObject {
     @Published var networkUp: Double = 0.0
@@ -10,6 +25,7 @@ class NASNetworkManager: ObservableObject {
     @Published var macNetworkDown: Double = 0.0
     @Published var storagePercentage: Double = 0.0
     @Published var storageFreeTB: Double = 0.0
+    @Published var storageTotalBytes: Double = 0.0
     @Published var cpuUsage: Double = 0.0
     @Published var ramUsage: Double = 0.0
     @Published var nasModel: String = ""
@@ -23,9 +39,16 @@ class NASNetworkManager: ObservableObject {
     
     @Published var folderSizes: [String: Double] = [:]
     @Published var isFetchingFolderSizes: Bool = false
-    private var lastFolderSizeFetchDate: Date? = nil
+    @Published var requiresOTP: Bool = false
+    @Published var topProcesses: [ProcessInfo] = []
+    @Published var volumes: [VolumeInfo] = []
     
+    private var consecutiveAuthFailures = 0
+    private let maxAuthRetries = 5
+    
+    private var lastFolderSizeFetchDate: Date? = nil
     private var lastStorageFetchDate: Date? = nil
+    
     private var activeIP: String { NetworkRouter.shared.activeIP }
     private var nasPort: String { UserDefaults.standard.string(forKey: "nasPort") ?? "5000" }
     private var username: String { UserDefaults.standard.string(forKey: "username") ?? "" }
@@ -33,10 +56,16 @@ class NASNetworkManager: ObservableObject {
     
     private var sid: String? = nil
     private var pollingTask: Task<Void, Never>?
+    private var macPollingTask: Task<Void, Never>?
+    private var folderScanTask: Task<Void, Never>?
     private var isBusy = false
     private var pollingInterval: TimeInterval = 3.0
     
     let logger = Logger(subsystem: "com.SynoMonitor", category: "Network")
+    
+    private let authService = NASAuthService()
+    private let sysService = SystemMonitorService()
+    private let fileService = FileStationService()
     
     func changePollingInterval(_ interval: TimeInterval) {
         guard pollingInterval != interval else { return }
@@ -59,6 +88,8 @@ class NASNetworkManager: ObservableObject {
     
     func startMonitoring() {
         pollingTask?.cancel()
+        macPollingTask?.cancel()
+        
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self = self else { return }
@@ -67,7 +98,6 @@ class NASNetworkManager: ObservableObject {
                     self.isTailscaleConnected = NetworkRouter.shared.isTailscale
                     
                     await self.fetchData()
-                    self.updateMacNetwork()
                     self.isBusy = false
                 }
                 
@@ -78,18 +108,37 @@ class NASNetworkManager: ObservableObject {
                 }
             }
         }
+        
+        macPollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self = self else { return }
+                self.updateMacNetwork()
+                do {
+                    try await Task.sleep(nanoseconds: 1_000_000_000) // Always 1.0s
+                } catch {
+                    break
+                }
+            }
+        }
     }
     
     func stopMonitoring() {
         pollingTask?.cancel()
         pollingTask = nil
+        macPollingTask?.cancel()
+        macPollingTask = nil
     }
     
     private func updateMacNetwork() {
-        let (rx, tx) = LocalNetworkMonitor.shared.getNetworkSpeedInMBps()
-        self.macNetworkDown = rx
-        self.macNetworkUp = tx
-        appendHistory(device: "Mac", rx: rx, tx: tx)
+        Task.detached(priority: .background) { [weak self] in
+            let (rx, tx) = LocalNetworkMonitor.shared.getNetworkSpeedInMBps()
+            await MainActor.run {
+                guard let self = self else { return }
+                self.macNetworkDown = rx
+                self.macNetworkUp = tx
+                self.appendHistory(device: "Mac", rx: rx, tx: tx)
+            }
+        }
     }
     
     private func appendHistory(device: String, rx: Double, tx: Double) {
@@ -101,48 +150,49 @@ class NASNetworkManager: ObservableObject {
         }
     }
     
-    private func buildURL(api: String, version: String, method: String, extraParams: [String: String] = [:]) -> URL? {
-        let ip = activeIP.isEmpty ? (UserDefaults.standard.string(forKey: "nasIP") ?? "") : activeIP
-        guard !ip.isEmpty else { return nil }
-        let scheme = nasPort == "5001" ? "https" : "http"
-        
-        let path = api == "SYNO.API.Auth" ? "/webapi/auth.cgi" : "/webapi/entry.cgi"
-        var components = URLComponents(string: "\(scheme)://\(ip):\(nasPort)\(path)")
-        
-        var queryItems = [
-            URLQueryItem(name: "api", value: api),
-            URLQueryItem(name: "version", value: version),
-            URLQueryItem(name: "method", value: method)
-        ]
-        
-        for (key, value) in extraParams {
-            queryItems.append(URLQueryItem(name: key, value: value))
-        }
-        
-        if let sid = sid, api != "SYNO.API.Auth" {
-            queryItems.append(URLQueryItem(name: "_sid", value: sid))
-        }
-        
-        components?.queryItems = queryItems
-        return components?.url
+    func resetData() {
+        stopMonitoring()
+        self.sid = nil
+        self.errorMessage = nil
+        self.requiresOTP = false
+        self.historyData.removeAll()
+        self.folderSizes.removeAll()
+        self.cpuUsage = 0
+        self.ramUsage = 0
+        self.networkUp = 0
+        self.networkDown = 0
+        self.macNetworkUp = 0
+        self.macNetworkDown = 0
+        self.storagePercentage = 0
+        self.storageFreeTB = 0
+        self.storageTotalBytes = 0
+        self.cpuModel = ""
+        self.nasModel = ""
+        self.diskModels = ""
+        self.topProcesses = []
+        self.volumes = []
+        startMonitoring()
     }
     
-    private func makeRequest(url: URL) async throws -> [String: Any] {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 10.0
-        let (data, _) = try await URLSession.shared.data(for: request)
-        guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
-            throw URLError(.badServerResponse)
+    func submitOTP(_ otpCode: String) {
+        Task {
+            _ = await authenticate(otpCode: otpCode)
         }
-        return json
     }
     
     private func fetchData() async {
         if sid == nil {
+            guard consecutiveAuthFailures < maxAuthRetries else {
+                self.errorMessage = "인증 \(maxAuthRetries)회 실패. 설정을 확인하세요."
+                return
+            }
             let success = await authenticate()
             if success {
+                consecutiveAuthFailures = 0
                 await fetchUtilization()
                 await attemptFetchStorage()
+            } else {
+                consecutiveAuthFailures += 1
             }
         } else {
             await fetchUtilization()
@@ -150,10 +200,29 @@ class NASNetworkManager: ObservableObject {
         }
     }
     
+    private func authenticate(otpCode: String? = nil) async -> Bool {
+        let result = await authService.authenticate(username: username, password: password, otpCode: otpCode, activeIP: activeIP, nasPort: nasPort)
+        
+        switch result {
+        case .success(let newSid):
+            self.sid = newSid
+            self.errorMessage = nil
+            self.requiresOTP = false
+            await fetchSystemInfo()
+            return true
+        case .requiresOTP:
+            self.requiresOTP = true
+            self.errorMessage = "2단계 인증(OTP)이 필요합니다."
+            return false
+        case .failure(let errorMsg):
+            self.errorMessage = errorMsg
+            return false
+        }
+    }
+    
     private func attemptFetchStorage() async {
         await fetchStorage()
         
-        // Trigger daily folder size scan
         if let lastFetch = lastFolderSizeFetchDate {
             if Date().timeIntervalSince(lastFetch) > 86400 {
                 triggerFolderSizeScan()
@@ -163,40 +232,9 @@ class NASNetworkManager: ObservableObject {
         }
     }
     
-    private func authenticate() async -> Bool {
-        guard !username.isEmpty else { return false }
-        guard let url = buildURL(api: "SYNO.API.Auth", version: "3", method: "login", extraParams: [
-            "account": username,
-            "passwd": password,
-            "session": "Core",
-            "format": "cookie"
-        ]) else { return false }
-        
-        do {
-            let json = try await makeRequest(url: url)
-            if let success = json["success"] as? Bool, !success {
-                self.errorMessage = "인증 실패 (설정 확인)"
-                return false
-            }
-            if let dataObj = json["data"] as? [String: Any], let sid = dataObj["sid"] as? String {
-                self.sid = sid
-                self.errorMessage = nil
-                
-                // Load system info once authenticated
-                await fetchSystemInfo()
-                return true
-            }
-        } catch {
-            self.errorMessage = "서버 접속 불가"
-            self.log("Auth Error: \(error.localizedDescription)")
-        }
-        return false
-    }
-    
     private func fetchSystemInfo() async {
-        guard let url = buildURL(api: "SYNO.Core.System", version: "1", method: "info") else { return }
-        do {
-            let json = try await makeRequest(url: url)
+        guard let s = sid else { return }
+        if let json = await sysService.fetchSystemInfo(activeIP: activeIP, nasPort: nasPort, sid: s) {
             if let success = json["success"] as? Bool, !success {
                 let code = (json["error"] as? [String: Any])?["code"] as? Int ?? 0
                 self.nasModel = "API Err: \(code)"
@@ -219,21 +257,18 @@ class NASNetworkManager: ObservableObject {
                 self.nasModel = dataObj["model"] as? String ?? "Unknown Model"
                 self.firmwareVer = dataObj["firmware_ver"] as? String ?? ""
                 let ramMB = dataObj["ram_size"] as? Int ?? 0
-                if ramMB > 0 {
-                    self.totalRamGB = Double(ramMB) / 1024.0
-                }
+                if ramMB > 0 { self.totalRamGB = Double(ramMB) / 1024.0 }
             } else {
                 self.nasModel = "No Data"
             }
-        } catch {
+        } else {
             self.nasModel = "JSON Err"
         }
     }
     
     private func fetchUtilization() async {
-        guard let url = buildURL(api: "SYNO.Core.System.Utilization", version: "1", method: "get") else { return }
-        do {
-            let json = try await makeRequest(url: url)
+        guard let s = sid else { return }
+        if let json = await sysService.fetchUtilization(activeIP: activeIP, nasPort: nasPort, sid: s) {
             if let success = json["success"] as? Bool, !success {
                 self.sid = nil
                 return
@@ -252,6 +287,12 @@ class NASNetworkManager: ObservableObject {
                     let other = cpuObj["other_load"] as? Int ?? 0
                     self.cpuUsage = Double(sys + user + other) / 100.0
                     NotificationManager.shared.checkCpu(usage: self.cpuUsage)
+                    
+                    if self.cpuUsage >= 0.7 {
+                        await fetchTopProcesses()
+                    } else {
+                        self.topProcesses = []
+                    }
                 }
                 if let memObj = dataObj["memory"] as? [String: Any] {
                     let usage = memObj["real_usage"] as? Int ?? 0
@@ -262,13 +303,26 @@ class NASNetworkManager: ObservableObject {
                     }
                 }
             }
-        } catch { }
+        }
+    }
+    
+    private func fetchTopProcesses() async {
+        guard let s = sid else { return }
+        guard let processes = await sysService.fetchProcessList(activeIP: activeIP, nasPort: nasPort, sid: s) else {
+            self.topProcesses = []
+            return
+        }
+        self.topProcesses = Array(processes.prefix(3).compactMap { proc -> ProcessInfo? in
+            guard let name = proc["name"] as? String else { return nil }
+            let cpu = (proc["cpu"] as? Double) ?? Double(proc["cpu"] as? Int ?? 0)
+            let ram = (proc["mem"] as? Double) ?? Double(proc["mem"] as? Int ?? 0)
+            return ProcessInfo(name: name, cpu: cpu, ram: ram)
+        })
     }
     
     private func fetchStorage() async {
-        guard let url = buildURL(api: "SYNO.Storage.CGI.Storage", version: "1", method: "load_info") else { return }
-        do {
-            let json = try await makeRequest(url: url)
+        guard let s = sid else { return }
+        if let json = await sysService.fetchStorage(activeIP: activeIP, nasPort: nasPort, sid: s) {
             if let success = json["success"] as? Bool, !success {
                 self.sid = nil
                 self.errorMessage = "세션 만료됨"
@@ -278,121 +332,129 @@ class NASNetworkManager: ObservableObject {
                 if let disks = dataObj["disks"] as? [[String: Any]] {
                     let models = disks.compactMap { $0["model"] as? String }.map { $0.trimmingCharacters(in: .whitespaces) }
                     let uniqueModels = Array(Set(models)).sorted()
-                    if !uniqueModels.isEmpty {
-                        self.diskModels = uniqueModels.joined(separator: ", ")
-                    }
+                    if !uniqueModels.isEmpty { self.diskModels = uniqueModels.joined(separator: ", ") }
                 }
-                if let volumes = dataObj["volumes"] as? [[String: Any]] {
+                if let volumesArr = dataObj["volumes"] as? [[String: Any]] {
                     var totalAll: Double = 0
                     var usedAll: Double = 0
-                    
-                    for vol in volumes {
+                    var parsedVolumes: [VolumeInfo] = []
+                    for vol in volumesArr {
                         if let sizeObj = vol["size"] as? [String: Any],
-                           let totalStr = sizeObj["total"] as? String,
-                           let usedStr = sizeObj["used"] as? String,
+                           let totalStr = sizeObj["total"] as? String, let usedStr = sizeObj["used"] as? String,
                            let t = Double(totalStr), let u = Double(usedStr) {
                             totalAll += t
                             usedAll += u
+                            let volName = vol["id"] as? String ?? vol["volume_path"] as? String ?? "volume\(parsedVolumes.count + 1)"
+                            parsedVolumes.append(VolumeInfo(name: volName, totalBytes: t, usedBytes: u))
+                            NotificationManager.shared.checkStorageVolume(name: volName, percentage: t > 0 ? u / t : 0)
                         }
                     }
-                    
+                    self.volumes = parsedVolumes
                     if totalAll > 0 {
                         let free = totalAll - usedAll
                         self.storagePercentage = usedAll / totalAll
                         self.storageFreeTB = free / 1_099_511_627_776.0
+                        self.storageTotalBytes = totalAll
                         NotificationManager.shared.checkStorage(percentage: self.storagePercentage)
                     }
                 }
             }
-        } catch { }
+        }
         self.lastStorageFetchDate = Date()
     }
     
-    // MARK: - Folder Sizes
-    
     func triggerFolderSizeScan() {
-        guard !self.isFetchingFolderSizes else { return }
+        if isFetchingFolderSizes { folderScanTask?.cancel() }
         self.isFetchingFolderSizes = true
-        
-        Task {
+        folderScanTask = Task {
             await fetchFolderSizesAsync()
+            self.folderScanTask = nil
         }
     }
     
     private func fetchFolderSizesAsync() async {
         defer { self.isFetchingFolderSizes = false }
+        guard let s = sid else { return }
         
-        guard let url = buildURL(api: "SYNO.FileStation.List", version: "2", method: "list_share", extraParams: ["additional": "real_path"]) else { return }
+        guard let shares = await fileService.fetchFolderList(activeIP: activeIP, nasPort: nasPort, sid: s) else { return }
         
-        do {
-            let json = try await makeRequest(url: url)
-            guard let dataObj = json["data"] as? [String: Any],
-                  let shares = dataObj["shares"] as? [[String: Any]] else {
-                return
-            }
+        var currentSizes: [String: Double] = [:]
+        
+        // Concurrency Limit logic
+        await withTaskGroup(of: (String, Double?).self) { group in
+            var activeTasks = 0
+            let maxConcurrentTasks = 2 // Limited to 2 for hibernation/IO protection
             
-            var currentSizes: [String: Double] = [:]
-            for share in shares {
-                guard let name = share["name"] as? String, let path = share["path"] as? String else { continue }
-                
-                let pathArr = [path]
-                guard let pathData = try? JSONSerialization.data(withJSONObject: pathArr),
-                      let pathStr = String(data: pathData, encoding: .utf8) else {
-                    currentSizes[name] = self.folderSizes[name] ?? 0.0
-                    continue
-                }
-                
-                if let sizeUrl = buildURL(api: "SYNO.FileStation.DirSize", version: "2", method: "start", extraParams: ["path": pathStr]) {
-                    if let sizeJson = try? await makeRequest(url: sizeUrl),
-                       let sizeDataObj = sizeJson["data"] as? [String: Any],
-                       let taskid = sizeDataObj["taskid"] as? String {
-                        
-                        let size = await pollFolderSize(taskid: taskid)
-                        currentSizes[name] = size ?? (self.folderSizes[name] ?? 0.0)
-                    } else {
-                        currentSizes[name] = self.folderSizes[name] ?? 0.0
+            var shareIterator = shares.makeIterator()
+            
+            // Initial batch
+            while activeTasks < maxConcurrentTasks, let share = shareIterator.next() {
+                if let name = share["name"] as? String, let path = share["path"] as? String,
+                   let pathData = try? JSONSerialization.data(withJSONObject: [path]),
+                   let pathStr = String(data: pathData, encoding: .utf8) {
+                    
+                    activeTasks += 1
+                    group.addTask {
+                        let size = await self.fetchSingleFolderSize(pathStr: pathStr, sid: s)
+                        return (name, size)
                     }
                 }
             }
             
-            self.folderSizes = currentSizes
-            if let data = try? JSONEncoder().encode(currentSizes) {
-                UserDefaults.standard.set(data, forKey: "folderSizes")
+            // Drain and spawn
+            for await (name, size) in group {
+                activeTasks -= 1
+                currentSizes[name] = size ?? (self.folderSizes[name] ?? 0.0)
+                
+                while activeTasks < maxConcurrentTasks, let share = shareIterator.next() {
+                    if let name = share["name"] as? String, let path = share["path"] as? String,
+                       let pathData = try? JSONSerialization.data(withJSONObject: [path]),
+                       let pathStr = String(data: pathData, encoding: .utf8) {
+                        
+                        activeTasks += 1
+                        group.addTask {
+                            let size = await self.fetchSingleFolderSize(pathStr: pathStr, sid: s)
+                            return (name, size)
+                        }
+                    }
+                }
             }
-            self.lastFolderSizeFetchDate = Date()
-            UserDefaults.standard.set(Date(), forKey: "lastFolderSizeFetchDate")
-            
-        } catch {
-            self.log("Folder Scan Error: \(error.localizedDescription)")
         }
+        
+        self.folderSizes = currentSizes
+        if let data = try? JSONEncoder().encode(currentSizes) { UserDefaults.standard.set(data, forKey: "folderSizes") }
+        self.lastFolderSizeFetchDate = Date()
+        UserDefaults.standard.set(Date(), forKey: "lastFolderSizeFetchDate")
     }
     
-    private func pollFolderSize(taskid: String) async -> Double? {
-        for _ in 0..<30 { // 최대 30번 (약 15초)
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5초 대기
-            
-            guard let url = buildURL(api: "SYNO.FileStation.DirSize", version: "2", method: "status", extraParams: ["taskid": taskid]) else { break }
-            
-            do {
-                let json = try await makeRequest(url: url)
-                guard let dataObj = json["data"] as? [String: Any] else { continue }
-                if let finished = dataObj["finished"] as? Bool, finished {
-                    let size = dataObj["total_size"] as? Double ?? 0.0
-                    // stop 호출 (await 사용 안하고 백그라운드로 쏴버리기)
-                    if let stopUrl = buildURL(api: "SYNO.FileStation.DirSize", version: "2", method: "stop", extraParams: ["taskid": taskid]) {
-                        _ = try? await makeRequest(url: stopUrl)
-                    }
-                    return size
-                }
-            } catch {
-                continue
-            }
-        }
-        
-        // Timeout 시 stop 호출
-        if let stopUrl = buildURL(api: "SYNO.FileStation.DirSize", version: "2", method: "stop", extraParams: ["taskid": taskid]) {
-            _ = try? await makeRequest(url: stopUrl)
+    private func fetchSingleFolderSize(pathStr: String, sid: String) async -> Double? {
+        if let taskid = await fileService.startDirSize(activeIP: activeIP, nasPort: nasPort, sid: sid, path: pathStr) {
+            return await pollFolderSize(taskid: taskid, sid: sid)
         }
         return nil
+    }
+    
+    private func pollFolderSize(taskid: String, sid: String) async -> Double? {
+        for _ in 0..<60 {
+            if Task.isCancelled { break }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if Task.isCancelled { break }
+            
+            if let json = await fileService.checkDirSizeStatus(activeIP: activeIP, nasPort: nasPort, sid: sid, taskid: taskid),
+               let dataObj = json["data"] as? [String: Any],
+               let finished = dataObj["finished"] as? Bool, finished {
+                
+                var size = 0.0
+                if let s = dataObj["total_size"] as? Double { size = s }
+                else if let s = dataObj["total_size"] as? String, let d = Double(s) { size = d }
+                else if let s = dataObj["total_size"] as? Int { size = Double(s) }
+                else if let s = dataObj["total_size"] as? Int64 { size = Double(s) }
+                
+                await fileService.stopDirSize(activeIP: activeIP, nasPort: nasPort, sid: sid, taskid: taskid)
+                return size
+            }
+        }
+        await fileService.stopDirSize(activeIP: activeIP, nasPort: nasPort, sid: sid, taskid: taskid)
+        return -1.0
     }
 }
