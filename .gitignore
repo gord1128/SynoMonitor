@@ -2,3 +2,5 @@ error.log
 *.bak
 main
 SynoMonitor.app/
+*.zip
+*.dmg
