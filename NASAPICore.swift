@@ -1,5 +1,17 @@
 import Foundation
 
+class SSLDelegate: NSObject, URLSessionDelegate {
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+            if let serverTrust = challenge.protectionSpace.serverTrust {
+                completionHandler(.useCredential, URLCredential(trust: serverTrust))
+                return
+            }
+        }
+        completionHandler(.performDefaultHandling, nil)
+    }
+}
+
 class NASAPICore {
     static let shared = NASAPICore()
     private init() {}
@@ -7,7 +19,8 @@ class NASAPICore {
     func buildURL(activeIP: String, nasPort: String, api: String, version: String, method: String, sid: String?, extraParams: [String: String] = [:]) -> URL? {
         let ip = activeIP.isEmpty ? (UserDefaults.standard.string(forKey: "nasIP") ?? "") : activeIP
         guard !ip.isEmpty else { return nil }
-        let scheme = nasPort == "5001" ? "https" : "http"
+        let useHTTPS = UserDefaults.standard.bool(forKey: "useHTTPS")
+        let scheme = useHTTPS ? "https" : "http"
         
         let path = api == "SYNO.API.Auth" ? "/webapi/auth.cgi" : "/webapi/entry.cgi"
         var components = URLComponents(string: "\(scheme)://\(ip):\(nasPort)\(path)")
@@ -33,7 +46,7 @@ class NASAPICore {
     private lazy var isolatedSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.connectionProxyDictionary = [:] // 프록시 무시
-        return URLSession(configuration: config)
+        return URLSession(configuration: config, delegate: SSLDelegate(), delegateQueue: nil)
     }()
     
     func makeRequest(url: URL, method: String = "GET", body: Data? = nil, maxRetries: Int = 3) async throws -> [String: Any] {
@@ -52,10 +65,12 @@ class NASAPICore {
             do {
                 let (data, _) = try await isolatedSession.data(for: request)
                 guard let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                    print("NASAPICore: JSON Serialization failed")
                     throw URLError(.badServerResponse)
                 }
                 return json
             } catch {
+                print("NASAPICore Request Failed (Attempt \(currentAttempt)): \(error.localizedDescription) for URL: \(url.absoluteString)")
                 lastError = error
                 currentAttempt += 1
                 if currentAttempt <= maxRetries {

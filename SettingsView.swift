@@ -6,6 +6,7 @@ struct SettingsView: View {
     @AppStorage("nasIP") private var nasIP = ""
     @AppStorage("localNasIP") private var localNasIP = ""
     @AppStorage("nasPort") private var nasPort = "5000"
+    @AppStorage("useHTTPS") private var useHTTPS = false
     @AppStorage("username") private var username = ""
     @AppStorage("launchAtLogin") private var launchAtLogin = false
     @AppStorage("menubarDisplay") private var menubarDisplay = "NAS 다운로드"
@@ -81,8 +82,9 @@ struct SettingsView: View {
                     TextField("Tailscale 접속 IP (예: 100.x.x.x)", text: $nasIP)
                     TextField("로컬 망 접속 IP (예: 192.168.x.x)", text: $localNasIP)
                     TextField("접속 포트", text: $nasPort)
-                    if nasPort == "5000" {
-                        Text("⚠️ HTTP 연결 중 — HTTPS(5001) 사용을 권장합니다.")
+                    Toggle("HTTPS 보안 연결 사용 (사설 인증서 허용)", isOn: $useHTTPS)
+                    if !useHTTPS {
+                        Text("⚠️ 보안을 위해 HTTPS 사용을 권장합니다.")
                             .font(.caption2)
                             .foregroundColor(.orange)
                     }
@@ -223,6 +225,7 @@ struct SettingsView: View {
         nasIP = ""
         localNasIP = ""
         nasPort = "5000"
+        useHTTPS = false
         username = ""
         password = ""
         launchAtLogin = false

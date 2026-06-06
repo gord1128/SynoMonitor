@@ -18,7 +18,7 @@ struct MonitorView: View {
     var openSettings: () -> Void
     
     var body: some View {
-        HStack(alignment: .top, spacing: 0) {
+        ZStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 12) {
             // 헤더 & Tailscale 상태
             HStack {
@@ -38,7 +38,8 @@ struct MonitorView: View {
                     let activeIP = NetworkRouter.shared.activeIP
                     let tsIP = UserDefaults.standard.string(forKey: "nasIP") ?? ""
                     let port = UserDefaults.standard.string(forKey: "nasPort") ?? "5000"
-                    let scheme = port == "5001" ? "https" : "http"
+                    let useHTTPS = UserDefaults.standard.bool(forKey: "useHTTPS")
+                    let scheme = useHTTPS ? "https" : "http"
                     let ip = activeIP.isEmpty ? tsIP : activeIP
                     if !ip.isEmpty, let url = URL(string: "\(scheme)://\(ip):\(port)/") {
                         NSWorkspace.shared.open(url)
@@ -117,14 +118,7 @@ struct MonitorView: View {
                     Spacer().frame(height: 4)
                 }
                 
-                if let errorMsg = nasManager.errorMessage {
-                    Text("⚠️ " + errorMsg)
-                        .font(.caption)
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.red.opacity(0.8).cornerRadius(8))
-                }
+
                 
                 Divider()
                 
@@ -318,12 +312,18 @@ struct MonitorView: View {
             }
             .padding(.vertical, 4)
             
-            if !nasManager.topProcesses.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("CPU 상위 프로세스")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundColor(.orange)
-                    ForEach(nasManager.topProcesses) { proc in
+            VStack(alignment: .leading, spacing: 4) {
+                Text(nasManager.topProcesses.isEmpty ? "CPU 상위 프로세스 (안정적)" : "CPU 상위 프로세스 (70% 초과)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(nasManager.topProcesses.isEmpty ? .secondary : .orange)
+                
+                if nasManager.topProcesses.isEmpty {
+                    Text("현재 리소스가 여유롭습니다.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                } else {
+                    ForEach(nasManager.topProcesses.prefix(3)) { proc in
                         HStack(spacing: 6) {
                             Image(systemName: "gearshape.fill")
                                 .font(.system(size: 8))
@@ -331,7 +331,7 @@ struct MonitorView: View {
                             Text(proc.name)
                                 .font(.caption2)
                                 .foregroundColor(.primary)
-                                .fixedSize(horizontal: false, vertical: true)
+                                .lineLimit(1)
                             Spacer()
                             Text(String(format: "CPU %.0f%%", proc.cpu))
                                 .font(.caption2.monospacedDigit())
@@ -341,24 +341,25 @@ struct MonitorView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+                    Spacer(minLength: 0)
                 }
-                .padding(8)
-                .background(Color.orange.opacity(0.08))
-                .cornerRadius(8)
             }
+            .padding(8)
+            .frame(height: 75)
+            .background(nasManager.topProcesses.isEmpty ? Color.secondary.opacity(0.05) : Color.orange.opacity(0.08))
+            .cornerRadius(8)
             
             Divider()
             Button(action: {
-                withAnimation(.spring()) {
-                    showStorage.toggle()
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    showStorage = true
                 }
             }) {
                 HStack {
                     Image(systemName: "internaldrive")
                     Text("스토리지 및 공유 폴더 상세 정보")
                     Spacer()
-                    Image(systemName: showStorage ? "chevron.left" : "chevron.right")
-                        .animation(.spring(), value: showStorage)
+                    Image(systemName: "chevron.right")
                 }
                 .padding(8)
                 .background(Color.secondary.opacity(0.1))
@@ -377,9 +378,18 @@ struct MonitorView: View {
                         .foregroundColor(.red)
                     Text("오프라인 상태")
                         .font(.headline)
-                    Text("데이터 갱신 중지됨")
+                    Text(nasManager.errorMessage ?? "알 수 없는 오류")
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    
+                    Button("수동 재연결") {
+                        Task {
+                            nasManager.retryConnection()
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
                 }
                 .padding(20)
                 .background(Color(NSColor.windowBackgroundColor).opacity(0.85))
@@ -398,15 +408,18 @@ struct MonitorView: View {
         } // Close VStack
         .padding()
         .frame(width: 320, alignment: .top)
+        .opacity(showStorage ? 0 : 1)
+        .offset(x: showStorage ? -320 : 0)
         
         if showStorage {
-            Divider()
-            
-            StorageView(nasManager: nasManager)
-                .frame(width: 340, alignment: .top)
-                .transition(.move(edge: .trailing).combined(with: .opacity))
+            StorageView(nasManager: nasManager, showStorage: $showStorage)
+                .frame(width: 320, alignment: .top)
+                .transition(.move(edge: .trailing))
         }
         }
-        .fixedSize()
+        .frame(width: 320)
+        .clipped()
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: showStorage)
+        // Removed .fixedSize() to prevent popover jittering
     }
 }

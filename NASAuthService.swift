@@ -20,7 +20,8 @@ class NASAuthService {
             bodyString += "&otp_code=\(safeOtp)"
         }
         
-        let scheme = nasPort == "5001" ? "https" : "http"
+        let useHTTPS = UserDefaults.standard.bool(forKey: "useHTTPS")
+        let scheme = useHTTPS ? "https" : "http"
         guard let url = URL(string: "\(scheme)://\(activeIP):\(nasPort)/webapi/auth.cgi") else {
             return .failure(errorMsg: "잘못된 URL 설정")
         }

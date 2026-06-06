@@ -26,7 +26,8 @@ class NetworkRouter: ObservableObject {
         
         if !localIP.isEmpty {
             // Ping Local IP
-            let scheme = port == "5001" ? "https" : "http"
+            let useHTTPS = UserDefaults.standard.bool(forKey: "useHTTPS")
+            let scheme = useHTTPS ? "https" : "http"
             guard let url = URL(string: "\(scheme)://\(localIP):\(port)/") else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 1.0
@@ -34,7 +35,7 @@ class NetworkRouter: ObservableObject {
             let config = URLSessionConfiguration.ephemeral
             config.timeoutIntervalForRequest = 1.0
             config.timeoutIntervalForResource = 1.0
-            let pingSession = URLSession(configuration: config)
+            let pingSession = URLSession(configuration: config, delegate: SSLDelegate(), delegateQueue: nil)
             
             pingSession.dataTask(with: request) { _, response, error in
                 let success = error == nil && (response as? HTTPURLResponse)?.statusCode ?? 500 < 400

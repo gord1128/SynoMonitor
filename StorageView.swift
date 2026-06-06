@@ -52,9 +52,36 @@ struct HoverableFolderRow: View {
 
 struct StorageView: View {
     @ObservedObject var nasManager: NASNetworkManager
+    @Binding var showStorage: Bool
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // 헤더 영역 (뒤로가기)
+            HStack {
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showStorage = false
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("뒤로 가기")
+                            .font(.subheadline)
+                    }
+                    .foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+                
+                Spacer()
+                
+                Text("스토리지 상세 정보")
+                    .font(.headline)
+                    .padding(.trailing, 20) // 중앙 정렬 보정
+                
+                Spacer()
+            }
+            .padding(.bottom, 4)
             // 스토리지 영역
             VStack(alignment: .leading, spacing: 6) {
                 HStack {

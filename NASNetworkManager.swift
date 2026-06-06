@@ -45,6 +45,7 @@ class NASNetworkManager: ObservableObject {
     
     private var consecutiveAuthFailures = 0
     private let maxAuthRetries = 5
+    private var lastAuthAttempt: Date = Date.distantPast
     
     private var lastFolderSizeFetchDate: Date? = nil
     private var lastStorageFetchDate: Date? = nil
@@ -70,6 +71,9 @@ class NASNetworkManager: ObservableObject {
     func changePollingInterval(_ interval: TimeInterval) {
         guard pollingInterval != interval else { return }
         pollingInterval = interval
+        if interval == 1.5 {
+            self.consecutiveAuthFailures = 0
+        }
         startMonitoring()
     }
     
@@ -150,6 +154,12 @@ class NASNetworkManager: ObservableObject {
         }
     }
     
+    func retryConnection() {
+        self.consecutiveAuthFailures = 0
+        self.errorMessage = nil
+        Task { await self.fetchData() }
+    }
+    
     func resetData() {
         stopMonitoring()
         self.sid = nil
@@ -182,17 +192,30 @@ class NASNetworkManager: ObservableObject {
     
     private func fetchData() async {
         if sid == nil {
-            guard consecutiveAuthFailures < maxAuthRetries else {
-                self.errorMessage = "인증 \(maxAuthRetries)회 실패. 설정을 확인하세요."
-                return
+            if consecutiveAuthFailures >= maxAuthRetries {
+                if Date().timeIntervalSince(lastAuthAttempt) < 60 {
+                    self.errorMessage = "서버 연결 실패 (60초 후 자동 재시도)"
+                    return
+                } else {
+                    consecutiveAuthFailures = 0
+                    self.errorMessage = "자동 재연결 시도 중..."
+                }
             }
-            let success = await authenticate()
-            if success {
+            
+            lastAuthAttempt = Date()
+            let authResult = await authenticate()
+            
+            switch authResult {
+            case .success:
                 consecutiveAuthFailures = 0
                 await fetchUtilization()
                 await attemptFetchStorage()
-            } else {
+            case .authError:
                 consecutiveAuthFailures += 1
+            case .networkError:
+                // Do not increment consecutiveAuthFailures for network errors (e.g. Tailscale initializing)
+                // We want to keep retrying without 60s penalty
+                break
             }
         } else {
             await fetchUtilization()
@@ -200,23 +223,33 @@ class NASNetworkManager: ObservableObject {
         }
     }
     
-    private func authenticate(otpCode: String? = nil) async -> Bool {
+    enum AuthAttemptResult {
+        case success
+        case authError
+        case networkError
+    }
+    
+    private func authenticate(otpCode: String? = nil) async -> AuthAttemptResult {
         let result = await authService.authenticate(username: username, password: password, otpCode: otpCode, activeIP: activeIP, nasPort: nasPort)
         
         switch result {
-        case .success(let newSid):
-            self.sid = newSid
+        case .success(let sid):
+            self.sid = sid
             self.errorMessage = nil
             self.requiresOTP = false
             await fetchSystemInfo()
-            return true
+            return .success
         case .requiresOTP:
-            self.requiresOTP = true
             self.errorMessage = "2단계 인증(OTP)이 필요합니다."
-            return false
-        case .failure(let errorMsg):
-            self.errorMessage = errorMsg
-            return false
+            self.requiresOTP = true
+            return .authError
+        case .failure(let msg):
+            self.errorMessage = msg
+            if msg.contains("서버 접속 불가") || msg.contains("IP 주소가 없습니다") || msg.contains("잘못된 URL") {
+                return .networkError
+            } else {
+                return .authError
+            }
         }
     }
     

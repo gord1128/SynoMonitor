@@ -54,6 +54,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         self.statusBarItem = NSStatusBar.system.statusItem(withLength: CGFloat(NSStatusItem.variableLength))
         if let button = self.statusBarItem.button {
             button.image = NSImage(systemSymbolName: "network", accessibilityDescription: "SynoMonitor")
+            button.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .regular)
             button.action = #selector(togglePopover(_:))
         }
         
@@ -76,18 +77,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
                 
                 switch pref {
                 case "NAS 다운로드":
-                    if self.nasManager.networkDown > 0 { displayString = String(format: " %.1f MB/s", self.nasManager.networkDown) }
+                    displayString = String(format: " %5.1f MB/s", self.nasManager.networkDown)
                 case "NAS 업로드":
-                    if self.nasManager.networkUp > 0 { displayString = String(format: " %.1f MB/s", self.nasManager.networkUp) }
+                    displayString = String(format: " %5.1f MB/s", self.nasManager.networkUp)
                 case "Mac 다운로드":
-                    if self.nasManager.macNetworkDown > 0 { displayString = String(format: " %.1f MB/s", self.nasManager.macNetworkDown) }
+                    displayString = String(format: " %5.1f MB/s", self.nasManager.macNetworkDown)
                 case "Mac 업로드":
-                    if self.nasManager.macNetworkUp > 0 { displayString = String(format: " %.1f MB/s", self.nasManager.macNetworkUp) }
+                    displayString = String(format: " %5.1f MB/s", self.nasManager.macNetworkUp)
                 case "컴팩트 (↓/↑)":
-                    var parts: [String] = []
-                    if self.nasManager.networkDown > 0 { parts.append(String(format: "↓%.1f", self.nasManager.networkDown)) }
-                    if self.nasManager.networkUp > 0 { parts.append(String(format: "↑%.1f", self.nasManager.networkUp)) }
-                    if !parts.isEmpty { displayString = " " + parts.joined(separator: " ") }
+                    displayString = String(format: " ↓%4.1f ↑%4.1f", self.nasManager.networkDown, self.nasManager.networkUp)
                 default:
                     break
                 }
